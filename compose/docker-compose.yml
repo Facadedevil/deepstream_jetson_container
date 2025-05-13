@@ -1,4 +1,3 @@
-```yaml
 version: '2.4'
 
 services:
@@ -6,7 +5,7 @@ services:
     build:
       context: ../acc
       dockerfile: Dockerfile
-    image: advantech-l1-05:jetson-ai
+    image: advantech-l2-05:jetson-ai
     container_name: advantech-jetson-ai
     restart: unless-stopped
     privileged: true     # Required for memory management
@@ -139,4 +138,3 @@ services:
       # Resource management
       - ENABLE_RESOURCE_MONITORING=true
       - RESOURCE_MONITOR_INTERVAL=30
-```
