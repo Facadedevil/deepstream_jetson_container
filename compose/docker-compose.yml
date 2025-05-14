@@ -15,7 +15,7 @@ services:
     tty: true
     stdin_open: true
     entrypoint: ["/entrypoint.sh"]
-    command: ["bash", "-c", "tail -f /dev/null"]
+    command: ["bash", "-c", "echo 'Container initialized. Run deepstream-help for usage information.' && tail -f /dev/null"]
     # Add resource limits that will be dynamically adjusted by the entrypoint script
     mem_reservation: 2G   # Initial reservation, will be adjusted
     mem_limit: 8G         # Maximum limit, will be adjusted
@@ -38,11 +38,21 @@ services:
       - /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro
       - /usr/local/cuda:/usr/local/cuda:ro
       
-      # DeepStream specific mounts
+      # DeepStream specific mounts - map all possible directories to cover different versions
       - /usr/src/jetson_multimedia_api:/usr/src/jetson_multimedia_api:ro
       - /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro
       - /opt/nvidia/deepstream:/opt/nvidia/deepstream:ro
+      - /opt/nvidia/deepstream/deepstream-6.3:/opt/nvidia/deepstream/deepstream-6.3:ro
+      - /opt/nvidia/deepstream/deepstream-6.2:/opt/nvidia/deepstream/deepstream-6.2:ro
+      - /opt/nvidia/deepstream/deepstream-6.1:/opt/nvidia/deepstream/deepstream-6.1:ro
+      - /opt/nvidia/deepstream/deepstream-6.0:/opt/nvidia/deepstream/deepstream-6.0:ro
       - /etc/nv_tegra_release:/etc/nv_tegra_release:ro
+      
+      # Additional GStreamer libraries
+      - /usr/lib/aarch64-linux-gnu/libgstreamer-1.0.so.0:/usr/lib/aarch64-linux-gnu/libgstreamer-1.0.so.0:ro
+      - /usr/lib/aarch64-linux-gnu/libgobject-2.0.so.0:/usr/lib/aarch64-linux-gnu/libgobject-2.0.so.0:ro
+      - /usr/lib/aarch64-linux-gnu/libglib-2.0.so.0:/usr/lib/aarch64-linux-gnu/libglib-2.0.so.0:ro
+      - /usr/lib/aarch64-linux-gnu/libgstrtspserver-1.0.so.0:/usr/lib/aarch64-linux-gnu/libgstrtspserver-1.0.so.0:ro
       
       # System information and control
       - /proc:/proc:ro
@@ -53,6 +63,10 @@ services:
       
       # Application volumes with full access
       - ./:/advantech:rw
+      - ./models:/advantech/models:rw 
+      - ./config:/advantech/config:rw
+      - ./logs:/advantech/logs:rw
+      - ./src:/advantech/src:rw
       
     devices:
       # Core GPU devices
@@ -102,9 +116,11 @@ services:
       - XAUTHORITY=/tmp/.docker.xauth
       - QT_X11_NO_MITSHM=1
       
-      # Dynamic library paths that use host paths
-      - LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra-egl:/opt/nvidia/deepstream/lib:/opt/nvidia/deepstream/lib/gst-plugins:/opt/nvidia/vpi2/lib64
-      - PATH=/usr/local/cuda/bin:/opt/nvidia/deepstream/bin:/opt/nvidia/vpi2/bin:${PATH}
+      # GStreamer settings - explicitly tell GStreamer where to find plugins
+      - GST_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/gstreamer-1.0:/opt/nvidia/deepstream/lib/gst-plugins
+      - GST_PLUGIN_SYSTEM_PATH=/usr/lib/aarch64-linux-gnu/gstreamer-1.0
+      - GST_DEBUG=2
+      - GST_DEBUG_FILE=/advantech/logs/gstreamer-debug.log
       
       # NVIDIA settings
       - NVIDIA_VISIBLE_DEVICES=all
@@ -118,19 +134,9 @@ services:
       - SWAP_SIZE_MB=4096
       - GPU_MEMORY_FRACTION=0.7
       
-      # Auto-detect Jetson capabilities
-      - JETSON_DETECT=true
-      
       # TensorRT settings - enable optimizations
       - TRT_INT8_ENABLE=1
       - TRT_FP16_ENABLE=1
-      
-      # DeepStream configuration
-      - GST_PLUGIN_PATH=/opt/nvidia/deepstream/lib/gst-plugins/:/usr/lib/aarch64-linux-gnu/gstreamer-1.0/
-      - DS_SDK_VERSION=auto
-      
-      # Python paths for both DeepStream and application code
-      - PYTHONPATH=/advantech:/opt/nvidia/deepstream/deepstream-6.1/sources/deepstream_python_apps:/opt/nvidia/deepstream/deepstream-6.1/sources/deepstream_python_apps/bindings
       
       # Power mode (can be detected at runtime)
       - POWER_MODE=auto

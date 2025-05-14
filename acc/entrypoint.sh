@@ -59,35 +59,154 @@ detect_jetson() {
 
 # Detect DeepStream version and set paths
 detect_deepstream() {
-    # Detect DeepStream version
-    if [ -d "/opt/nvidia/deepstream" ]; then
-        # Try to find DeepStream version by checking directories
-        if [ -d "/opt/nvidia/deepstream/deepstream-6.3" ]; then
-            DS_VERSION="6.3"
-        elif [ -d "/opt/nvidia/deepstream/deepstream-6.2" ]; then
-            DS_VERSION="6.2"
-        elif [ -d "/opt/nvidia/deepstream/deepstream-6.1" ]; then
-            DS_VERSION="6.1"
-        elif [ -d "/opt/nvidia/deepstream/deepstream-6.0" ]; then
-            DS_VERSION="6.0"
-        else
-            # Check for version file if it exists
-            if [ -f "/opt/nvidia/deepstream/version" ]; then
-                DS_VERSION=$(cat /opt/nvidia/deepstream/version)
+    echo -e "${BLUE}[INFO]${NC} Detecting DeepStream installation..."
+
+    # Find DeepStream installation by checking common locations
+    DS_DIRS=(
+        "/opt/nvidia/deepstream/deepstream-6.3"
+        "/opt/nvidia/deepstream/deepstream-6.2"
+        "/opt/nvidia/deepstream/deepstream-6.1"
+        "/opt/nvidia/deepstream/deepstream-6.0"
+        "/opt/nvidia/deepstream"
+    )
+
+    DS_PATH=""
+    DS_VERSION=""
+
+    for dir in "${DS_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            DS_PATH="$dir"
+            if [[ "$dir" == *"deepstream-"* ]]; then
+                DS_VERSION=$(echo "$dir" | sed "s/.*deepstream-//")
             else
                 DS_VERSION="unknown"
             fi
+            echo -e "${GREEN}[FOUND]${NC} DeepStream installation: $DS_PATH (version $DS_VERSION)"
+            break
         fi
-        echo -e "${GREEN}[DETECTED]${NC} DeepStream version: ${DS_VERSION}"
-        
-        # Update DeepStream paths based on version
-        export DS_SDK_VERSION=$DS_VERSION
-        export PYTHONPATH=/advantech:/opt/nvidia/deepstream/deepstream-${DS_VERSION}/sources/deepstream_python_apps:/opt/nvidia/deepstream/deepstream-${DS_VERSION}/sources/deepstream_python_apps/bindings:$PYTHONPATH
-        echo -e "${GREEN}[CONFIGURED]${NC} DeepStream paths for version ${DS_VERSION}"
-    else
-        echo -e "${YELLOW}[WARNING]${NC} DeepStream not found on host system"
-        DS_VERSION="unknown"
+    done
+
+    if [ -z "$DS_PATH" ]; then
+        echo -e "${YELLOW}[WARNING]${NC} DeepStream installation not found"
+        return 1
     fi
+
+    # Check if critical libraries are present
+    echo -e "${BLUE}[INFO]${NC} Checking for critical DeepStream libraries..."
+    
+    CRITICAL_LIBS=(
+        "libnvdsgst_meta.so"
+        "libnvds_meta.so"
+        "libnvstreammux.so"
+        "libnvdsgst_helper.so"
+        "libnvds_batch_jpegenc.so"
+        "libnvds_nvmultiobjecttracker.so"
+    )
+
+    MISSING_LIBS=0
+    for lib in "${CRITICAL_LIBS[@]}"; do
+        if [ -f "$DS_PATH/lib/$lib" ]; then
+            echo -e "${GREEN}[FOUND]${NC} $lib in $DS_PATH/lib"
+        elif [ -f "$DS_PATH/lib/gst-plugins/$lib" ]; then
+            echo -e "${GREEN}[FOUND]${NC} $lib in $DS_PATH/lib/gst-plugins"
+        else
+            echo -e "${YELLOW}[WARNING]${NC} $lib not found in DeepStream installation"
+            MISSING_LIBS=$((MISSING_LIBS + 1))
+        fi
+    done
+
+    if [ $MISSING_LIBS -gt 0 ]; then
+        echo -e "${YELLOW}[WARNING]${NC} $MISSING_LIBS DeepStream libraries could not be found"
+    fi
+
+    # Store the original values to append
+    ORIG_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+    ORIG_PATH="$PATH"
+    ORIG_GST_PLUGIN_PATH="$GST_PLUGIN_PATH"
+    ORIG_PYTHONPATH="$PYTHONPATH"
+    
+    # Clear variables and set with explicit paths to avoid duplicates
+    export LD_LIBRARY_PATH="$DS_PATH/lib:$DS_PATH/lib/gst-plugins"
+    if [ -n "$ORIG_LD_LIBRARY_PATH" ]; then
+        export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$ORIG_LD_LIBRARY_PATH"
+    fi
+    
+    export PATH="$DS_PATH/bin"
+    if [ -n "$ORIG_PATH" ]; then
+        export PATH="$PATH:$ORIG_PATH"
+    fi
+    
+    export GST_PLUGIN_PATH="$DS_PATH/lib/gst-plugins:/usr/lib/aarch64-linux-gnu/gstreamer-1.0"
+    if [ -n "$ORIG_GST_PLUGIN_PATH" ]; then
+        export GST_PLUGIN_PATH="$GST_PLUGIN_PATH:$ORIG_GST_PLUGIN_PATH"
+    fi
+    
+    if [ -d "$DS_PATH/sources/deepstream_python_apps" ]; then
+        export PYTHONPATH="$DS_PATH/sources/deepstream_python_apps:$DS_PATH/sources/deepstream_python_apps/bindings"
+        if [ -n "$ORIG_PYTHONPATH" ]; then
+            export PYTHONPATH="$PYTHONPATH:$ORIG_PYTHONPATH"
+        fi
+    fi
+    
+    # Export DeepStream paths for other scripts
+    export DS_PATH
+    export DS_VERSION
+    
+    # Create system-wide environment script
+    echo -e "${BLUE}[INFO]${NC} Creating system-wide environment script..."
+    
+    mkdir -p /etc/profile.d
+    cat > /etc/profile.d/deepstream.sh << EOF
+#!/bin/bash
+# DeepStream environment setup
+export DS_PATH="$DS_PATH"
+export DS_VERSION="$DS_VERSION"
+export LD_LIBRARY_PATH="$DS_PATH/lib:$DS_PATH/lib/gst-plugins:\$LD_LIBRARY_PATH"
+export PATH="$DS_PATH/bin:\$PATH"
+export GST_PLUGIN_PATH="$DS_PATH/lib/gst-plugins:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:\$GST_PLUGIN_PATH"
+export PYTHONPATH="$DS_PATH/sources/deepstream_python_apps:$DS_PATH/sources/deepstream_python_apps/bindings:\$PYTHONPATH"
+EOF
+    
+    chmod +x /etc/profile.d/deepstream.sh
+    
+    # Create .bashrc entry for interactive shells
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "deepstream.sh" "$HOME/.bashrc"; then
+            echo -e "${BLUE}[INFO]${NC} Adding DeepStream environment to .bashrc..."
+            echo "" >> "$HOME/.bashrc"
+            echo "# DeepStream environment setup" >> "$HOME/.bashrc"
+            echo "if [ -f /etc/profile.d/deepstream.sh ]; then" >> "$HOME/.bashrc"
+            echo "  . /etc/profile.d/deepstream.sh" >> "$HOME/.bashrc"
+            echo "fi" >> "$HOME/.bashrc"
+        fi
+    fi
+    
+    # Create a run-deepstream wrapper script
+    echo -e "${BLUE}[INFO]${NC} Creating DeepStream wrapper script..."
+    
+    mkdir -p /usr/local/bin
+    cat > /usr/local/bin/run-deepstream << EOF
+#!/bin/bash
+# DeepStream Application Runner
+
+# Set up DeepStream environment
+export DS_PATH="$DS_PATH"
+export DS_VERSION="$DS_VERSION"
+export LD_LIBRARY_PATH="$DS_PATH/lib:$DS_PATH/lib/gst-plugins:\$LD_LIBRARY_PATH"
+export PATH="$DS_PATH/bin:\$PATH"
+export GST_PLUGIN_PATH="$DS_PATH/lib/gst-plugins:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:\$GST_PLUGIN_PATH"
+export PYTHONPATH="$DS_PATH/sources/deepstream_python_apps:$DS_PATH/sources/deepstream_python_apps/bindings:\$PYTHONPATH"
+
+# Run the command with proper environment
+exec "\$@"
+EOF
+    
+    chmod +x /usr/local/bin/run-deepstream
+    
+    echo -e "${GREEN}[SUCCESS]${NC} DeepStream environment setup complete"
+    
+    # Return success
+    return 0
 }
 
 # Detect available hardware accelerators
@@ -367,26 +486,210 @@ EOF
 }
 
 #################################
-# HELPER SCRIPTS CREATION
+# DEEPSTREAM TOOLS CREATION
 #################################
 
-# Set up DeepStream wrapper script
-create_deepstream_wrapper() {
-    cat > /usr/local/bin/run-deepstream << EOF
-#!/bin/bash
-echo "Setting up DeepStream environment..."
-export LD_LIBRARY_PATH=/opt/nvidia/deepstream/lib:/opt/nvidia/deepstream/lib/gst-plugins:\$LD_LIBRARY_PATH
-export GST_PLUGIN_PATH=/opt/nvidia/deepstream/lib/gst-plugins/:/usr/lib/aarch64-linux-gnu/gstreamer-1.0/:\$GST_PLUGIN_PATH
-export PYTHONPATH=/opt/nvidia/deepstream/deepstream-${DS_VERSION}/sources/deepstream_python_apps:/opt/nvidia/deepstream/deepstream-${DS_VERSION}/sources/deepstream_python_apps/bindings:\$PYTHONPATH
+# Create DeepStream diagnostic tool
+create_deepstream_tools() {
+    echo -e "${BLUE}[INFO]${NC} Creating DeepStream diagnostic tools..."
 
-# Pre-optimize memory for DeepStream
-if [ -f "/usr/local/bin/optimize-for-gpu" ]; then
-    /usr/local/bin/optimize-for-gpu
+    # Create DS check script
+    cat > /usr/local/bin/ds-check << 'EOF'
+#!/bin/bash
+# DeepStream Diagnostic Tool
+
+# Terminal colors
+GREEN="\033[0;32m"
+BLUE="\033[0;34m"
+YELLOW="\033[0;33m"
+RED="\033[0;31m"
+NC="\033[0m"
+
+echo -e "${BLUE}DeepStream Installation Check${NC}"
+echo "=============================="
+
+# Source environment setup
+if [ -f "/etc/profile.d/deepstream.sh" ]; then
+    source /etc/profile.d/deepstream.sh
 fi
 
-exec "\$@"
+# Check DeepStream installation
+if [ -n "$DS_PATH" ] && [ -d "$DS_PATH" ]; then
+    echo -e "${GREEN}DeepStream path:${NC} $DS_PATH"
+    echo -e "${GREEN}DeepStream version:${NC} $DS_VERSION"
+    
+    # Check DeepStream version details
+    if [ -f "$DS_PATH/version" ]; then
+        echo -e "${GREEN}Version details:${NC} $(cat $DS_PATH/version)"
+    fi
+    
+    # Check libraries count
+    LIB_COUNT=$(find $DS_PATH/lib -name "*.so*" 2>/dev/null | wc -l)
+    echo -e "${GREEN}Libraries:${NC} $LIB_COUNT files"
+    
+    # Check binaries count
+    BIN_COUNT=$(find $DS_PATH/bin -type f -executable 2>/dev/null | wc -l)
+    echo -e "${GREEN}Binaries:${NC} $BIN_COUNT files"
+    
+    # Check GStreamer plugins count
+    GST_COUNT=$(find $DS_PATH/lib/gst-plugins -name "*.so*" 2>/dev/null | wc -l)
+    echo -e "${GREEN}GStreamer plugins:${NC} $GST_COUNT files"
+else
+    echo -e "${RED}DeepStream installation not found!${NC}"
+    exit 1
+fi
+
+# Check environment variables
+echo -e "\n${BLUE}DeepStream environment variables:${NC}"
+echo -e "${GREEN}LD_LIBRARY_PATH:${NC} $LD_LIBRARY_PATH"
+echo -e "${GREEN}GST_PLUGIN_PATH:${NC} $GST_PLUGIN_PATH"
+echo -e "${GREEN}PATH:${NC} $PATH"
+echo -e "${GREEN}PYTHONPATH:${NC} $PYTHONPATH"
+
+# Check critical libraries
+echo -e "\n${BLUE}Checking for critical DeepStream libraries:${NC}"
+MISSING_LIBS=0
+
+for lib in libnvdsgst_meta.so libnvds_meta.so libnvstreammux.so libnvdsgst_helper.so libnvds_batch_jpegenc.so libnvds_nvmultiobjecttracker.so; do
+    LIB_FOUND=0
+    
+    # Check in DeepStream lib directory
+    if [ -f "$DS_PATH/lib/$lib" ]; then
+        echo -e "${GREEN}✓${NC} $lib: $DS_PATH/lib/$lib"
+        LIB_FOUND=1
+    # Check in DeepStream gst-plugins directory
+    elif [ -f "$DS_PATH/lib/gst-plugins/$lib" ]; then
+        echo -e "${GREEN}✓${NC} $lib: $DS_PATH/lib/gst-plugins/$lib"
+        LIB_FOUND=1
+    fi
+    
+    if [ $LIB_FOUND -eq 0 ]; then
+        echo -e "${RED}✗${NC} $lib: Not found"
+        MISSING_LIBS=$((MISSING_LIBS + 1))
+    fi
+done
+
+if [ $MISSING_LIBS -gt 0 ]; then
+    echo -e "${RED}[WARNING]${NC} Missing libraries in system path: $MISSING_LIBS"
+else
+    echo -e "${GREEN}All critical libraries found${NC}"
+fi
+
+# Check DeepStream GStreamer plugins
+echo -e "\n${BLUE}Checking DeepStream GStreamer plugins:${NC}"
+if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+    MISSING_PLUGINS=0
+    
+    for plugin in nvstreammux nvinfer nvvideoconvert nvdsosd; do
+        if gst-inspect-1.0 $plugin >/dev/null 2>&1; then
+            PLUGIN_PATH=$(gst-inspect-1.0 $plugin 2>/dev/null | grep "Filename" | head -1 | sed 's/Filename: //')
+            echo -e "${GREEN}✓${NC} $plugin plugin is available: $PLUGIN_PATH"
+        else
+            echo -e "${RED}✗${NC} $plugin plugin is NOT available"
+            MISSING_PLUGINS=$((MISSING_PLUGINS + 1))
+        fi
+    done
+    
+    if [ $MISSING_PLUGINS -gt 0 ]; then
+        echo -e "${RED}[WARNING]${NC} Missing $MISSING_PLUGINS GStreamer plugins"
+    else
+        echo -e "${GREEN}All required GStreamer plugins available${NC}"
+    fi
+else
+    echo -e "${RED}✗${NC} gst-inspect-1.0 not found, cannot check plugins"
+fi
+
+# Test a simple GStreamer pipeline
+echo -e "\n${BLUE}Testing simple GStreamer pipeline:${NC}"
+if command -v gst-launch-1.0 >/dev/null 2>&1; then
+    if timeout 5 gst-launch-1.0 videotestsrc num-buffers=10 ! fakesink >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Basic GStreamer pipeline works"
+        
+        # Try with NVIDIA plugins if they seem available
+        if [ $MISSING_PLUGINS -eq 0 ]; then
+            if timeout 5 gst-launch-1.0 videotestsrc num-buffers=10 ! nvvideoconvert ! fakesink >/dev/null 2>&1; then
+                echo -e "${GREEN}✓${NC} NVIDIA GStreamer elements work"
+            else
+                echo -e "${RED}✗${NC} NVIDIA GStreamer elements test failed"
+            fi
+        fi
+    else
+        echo -e "${RED}✗${NC} Basic GStreamer pipeline failed"
+    fi
+else
+    echo -e "${RED}✗${NC} gst-launch-1.0 not found"
+fi
+
+# Check DeepStream application
+echo -e "\n${BLUE}Checking DeepStream application:${NC}"
+if command -v deepstream-app >/dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} deepstream-app found: $(which deepstream-app)"
+    
+    # Try to get version info
+    DS_VERSION_INFO=$(timeout 2 deepstream-app --version-all 2>&1 | grep -v "ERROR")
+    if [ -n "$DS_VERSION_INFO" ]; then
+        echo -e "${GREEN}✓${NC} DeepStream version info: $DS_VERSION_INFO"
+    fi
+else
+    if [ -x "$DS_PATH/bin/deepstream-app" ]; then
+        echo -e "${YELLOW}!${NC} deepstream-app found but not in PATH: $DS_PATH/bin/deepstream-app"
+        echo -e "${YELLOW}!${NC} Use run-deepstream to execute DeepStream applications"
+    else
+        echo -e "${RED}✗${NC} deepstream-app not found"
+    fi
+fi
+
+# Suggest fixes if there are issues
+if [ $MISSING_LIBS -gt 0 ] || [ $MISSING_PLUGINS -gt 0 ]; then
+    echo -e "\n${BLUE}Suggested fixes:${NC}"
+    echo -e "${YELLOW}1. Use run-deepstream wrapper for all DeepStream applications:${NC}"
+    echo -e "   run-deepstream <your-command>"
+    echo -e "${YELLOW}2. Make sure DeepStream paths are properly set in your environment:${NC}"
+    echo -e "   source /etc/profile.d/deepstream.sh"
+    echo -e "${YELLOW}3. Check if DeepStream libraries are correctly installed:${NC}"
+    echo -e "   ls -la $DS_PATH/lib"
+    echo -e "   ls -la $DS_PATH/lib/gst-plugins"
+fi
 EOF
-    chmod +x /usr/local/bin/run-deepstream
+    chmod +x /usr/local/bin/ds-check
+
+    # Create DeepStream help script
+    cat > /usr/local/bin/deepstream-help << 'EOF'
+#!/bin/bash
+
+# Colors for better readability
+GREEN="\033[0;32m"
+BLUE="\033[0;34m"
+YELLOW="\033[0;33m"
+RED="\033[0;31m"
+NC="\033[0m"
+
+echo -e "${BLUE}=== Advantech Edge AI Container with DeepStream Support ===${NC}"
+echo ""
+echo -e "${BLUE}DeepStream utilities:${NC}"
+echo -e "  ${GREEN}run-deepstream${NC}     - Run DeepStream applications with proper environment"
+echo -e "                       Example: run-deepstream deepstream-app -c config.txt"
+echo -e "  ${GREEN}ds-check${NC}           - Check DeepStream installation and configuration"
+echo ""
+echo -e "${BLUE}System utilities:${NC}"
+echo -e "  ${GREEN}analyze-system${NC}     - Print detailed system information"
+echo -e "  ${GREEN}gpu-monitor${NC}        - Monitor GPU usage"
+echo -e "  ${GREEN}resource-manager${NC}   - Manage system resources"
+echo -e "  ${GREEN}container-info${NC}     - Show container configuration"
+echo -e "  ${GREEN}optimize-for-gpu${NC}   - Optimize system for GPU processing"
+echo ""
+echo -e "${BLUE}Usage examples:${NC}"
+echo -e "  ${YELLOW}ds-check${NC}                        - Check DeepStream installation"
+echo -e "  ${YELLOW}run-deepstream python3 app.py${NC}    - Run a Python DeepStream application"
+echo -e "  ${YELLOW}run-deepstream gst-launch-1.0 videotestsrc ! nvvideoconvert ! fakesink${NC} - Test a pipeline"
+echo ""
+echo -e "${BLUE}Troubleshooting tips:${NC}"
+echo -e "  - If DeepStream libraries are missing, always use ${YELLOW}run-deepstream${NC} wrapper"
+echo -e "  - Use ${YELLOW}source /etc/profile.d/deepstream.sh${NC} to set up environment in new shells"
+echo -e "  - Check logs in /advantech/logs for diagnostic information"
+echo "===================================================="
+EOF
+    chmod +x /usr/local/bin/deepstream-help
 }
 
 # Create container info script
@@ -398,7 +701,9 @@ echo "Jetson Model: ${JETSON_MODEL}"
 echo "JetPack Version: ${JETPACK_VERSION}"
 echo "CUDA Version: ${CUDA_VERSION}"
 echo "DeepStream Version: ${DS_VERSION}"
+echo "DeepStream Path: ${DS_PATH}"
 echo "Power Mode: ${POWER_MODE}"
+echo ""
 echo "Available Hardware Accelerators:"
 for acc in ${ACCELERATORS}; do
     echo " - \$acc: Available"
@@ -415,15 +720,16 @@ fi
 if [ "$ENABLE_RESOURCE_MONITORING" = "true" ]; then
     echo "Resource Monitoring: Enabled (${RESOURCE_MONITOR_INTERVAL}s interval)"
     echo "Monitoring Log: /advantech/logs/resources.log"
-else
-    echo "Resource Monitoring: Disabled"
 fi
 echo ""
-echo "Memory Tools:"
-echo "  clear-memory       - Clear memory caches and buffers"
-echo "  optimize-for-gpu   - Optimize memory for GPU processing"
-echo "  throttle-cpu       - Reduce CPU priority for a process"
-echo "  memory-profile     - Show memory allocation profile"
+echo "Utilities:"
+echo "  deepstream-help    - Show DeepStream usage information"
+echo "  ds-check          - Check DeepStream installation and configuration"
+echo "  run-deepstream    - Run applications with DeepStream environment"
+echo "  clear-memory      - Clear memory caches and buffers"
+echo "  optimize-for-gpu  - Optimize memory for GPU processing"
+echo "  throttle-cpu      - Reduce CPU priority for a process"
+echo "  memory-profile    - Show memory allocation profile"
 echo "===================================="
 EOF
     chmod +x /usr/local/bin/container-info
@@ -432,6 +738,9 @@ EOF
 #################################
 # MAIN EXECUTION
 #################################
+
+# Create necessary directories
+mkdir -p /advantech/models /advantech/src /advantech/config /advantech/logs
 
 # Run detection functions
 detect_jetson
@@ -447,9 +756,9 @@ if [ "$ENABLE_DYNAMIC_MEMORY" = "true" ]; then
 fi
 
 # Create helper scripts
-create_deepstream_wrapper
-create_container_info
 create_memory_tools
+create_deepstream_tools
+create_container_info
 
 # Start resource monitoring if enabled
 if [ "$ENABLE_RESOURCE_MONITORING" = "true" ]; then
@@ -457,19 +766,18 @@ if [ "$ENABLE_RESOURCE_MONITORING" = "true" ]; then
 fi
 
 # Start resource and GPU monitoring if enabled
-if [ "$ENABLE_RESOURCE_MONITORING" = "true" ]; then
+if [ "$ENABLE_RESOURCE_MONITORING" = "true" ] && [ -x "/usr/local/bin/resource-manager" ]; then
     echo -e "${BLUE}[INFO]${NC} Starting resource monitoring services..."
     
     # Start resource manager in background
-    resource-manager > /dev/null 2>&1 &
+    /usr/local/bin/resource-manager > /dev/null 2>&1 &
     echo -e "${GREEN}[STARTED]${NC} Resource Manager (PID: $!)"
     
-    # Start GPU monitoring in background
-    gpu-monitor > /dev/null 2>&1 &
-    echo -e "${GREEN}[STARTED]${NC} GPU Monitor (PID: $!)"
-    
-    # Add info about monitoring to container-info script
-    sed -i '/===================================/i echo "Resource Monitoring Logs:"\necho "  - GPU Monitor: /advantech/logs/gpu-usage.log"\necho "  - Resource Manager: /advantech/logs/resource-usage.log"' /usr/local/bin/container-info
+    # Start GPU monitoring in background if available
+    if [ -x "/usr/local/bin/gpu-monitor" ]; then
+        /usr/local/bin/gpu-monitor > /dev/null 2>&1 &
+        echo -e "${GREEN}[STARTED]${NC} GPU Monitor (PID: $!)"
+    fi
 fi
 
 # Summary
@@ -483,7 +791,7 @@ if [ "$ENABLE_DYNAMIC_MEMORY" = "true" ]; then
     echo -e "${BLUE}[INFO]${NC} GPU Memory Fraction: ${GPU_MEMORY_FRACTION}"
 fi
 echo -e "${BLUE}[INFO]${NC} Run 'container-info' for detailed information"
-echo -e "${BLUE}[INFO]${NC} Use 'run-deepstream' to execute DeepStream applications"
+echo -e "${BLUE}[INFO]${NC} Run 'deepstream-help' for DeepStream usage guide"
 echo -e "${BLUE}=====================================================${NC}"
 
 # Execute the command passed to the script

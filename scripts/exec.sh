@@ -31,7 +31,7 @@ cd "$(dirname "$0")/.."
 usage() {
     echo -e "${BLUE}Usage:${NC} $0 [options] [command]"
     echo ""
-    echo "Options:"
+    echo -e "${BLUE}Options:${NC}"
     echo "  -h, --help                 Show this help message"
     echo "  -d, --detach               Run in non-interactive mode"
     echo "  -v, --verbose              Enable verbose output"
@@ -41,15 +41,23 @@ usage() {
     echo "  -t, --tensorflow, --tf     Use TensorFlow wrapper"
     echo "  -ds, --deepstream          Use DeepStream wrapper"
     echo ""
-    echo "Commands:"
-    echo "  If no command is provided, an interactive shell will be started"
+    echo -e "${BLUE}DeepStream Commands:${NC}"
+    echo "  deepstream-help            Show DeepStream usage information"
+    echo "  ds-check                   Check DeepStream installation"
+    echo "  run-deepstream <command>   Run command with DeepStream environment"
+    echo "  ds-optimize                Optimize models for DeepStream"
+    echo "  ds-config                  Generate DeepStream configuration"
     echo ""
-    echo "Examples:"
+    echo -e "${BLUE}System Commands:${NC}"
+    echo "  container-info             Show container configuration"
+    echo "  analyze-system             Print detailed system information"
+    echo "  optimize-for-gpu           Optimize system for GPU processing"
+    echo ""
+    echo -e "${BLUE}Examples:${NC}"
     echo "  $0                         Start interactive shell"
-    echo "  $0 system-info             Run system-info command"
-    echo "  $0 --yolo python app.py    Run Python script with YOLO wrapper"
-    echo "  $0 --tensorflow python model.py   Run Python script with TensorFlow wrapper"
-    echo "  $0 --env BATCH_SIZE=64 python train.py   Run with environment variable"
+    echo "  $0 ds-check                Check DeepStream installation"
+    echo "  $0 --deepstream python app.py    Run Python script with DeepStream"
+    echo "  $0 run-deepstream deepstream-app -c config.txt    Run DeepStream app"
 }
 
 # Parse command line arguments
@@ -219,23 +227,32 @@ exec_in_container() {
     return $EXIT_SUCCESS
 }
 
-# Check for common commands and suggest wrappers
+# Check for DeepStream commands and suggest wrappers
 suggest_wrapper() {
     if [ -z "$WRAPPER" ] && [ ${#COMMAND_ARGS[@]} -gt 0 ]; then
-        # Check for Python commands that might benefit from wrappers
-        if [ "${COMMAND_ARGS[0]}" == "python" ] || [ "${COMMAND_ARGS[0]}" == "python3" ]; then
-            # Check filename for clues
-            if [ ${#COMMAND_ARGS[@]} -gt 1 ]; then
-                filename="${COMMAND_ARGS[1]}"
-                if [[ "$filename" == *"yolo"* ]] || [[ "$filename" == *"detect"* ]] || [[ "$filename" == *"ultra"* ]]; then
-                    echo -e "${YELLOW}[TIP]${NC} This looks like a YOLO script. Consider using --yolo for better performance."
-                elif [[ "$filename" == *"tensorflow"* ]] || [[ "$filename" == *"tf_"* ]] || [[ "$filename" == *"keras"* ]]; then
-                    echo -e "${YELLOW}[TIP]${NC} This looks like a TensorFlow script. Consider using --tensorflow for better performance."
-                elif [[ "$filename" == *"deepstream"* ]] || [[ "$filename" == *"ds_"* ]]; then
-                    echo -e "${YELLOW}[TIP]${NC} This looks like a DeepStream script. Consider using --deepstream for better performance."
-                fi
-            fi
+        # Check for DeepStream commands
+        if [[ "${COMMAND_ARGS[0]}" == "deepstream-app" ]]; then
+            echo -e "${YELLOW}[TIP]${NC} Running DeepStream application. For better environment setup, consider using:"
+            echo -e "${YELLOW}[TIP]${NC} $0 run-deepstream deepstream-app ${COMMAND_ARGS[@]:1}"
+        elif [[ "${COMMAND_ARGS[0]}" == "python"* ]] && [[ "${COMMAND_ARGS[1]}" == *"deepstream"* ]]; then
+            echo -e "${YELLOW}[TIP]${NC} This looks like a DeepStream Python script. Consider using:"
+            echo -e "${YELLOW}[TIP]${NC} $0 run-deepstream ${COMMAND_ARGS[@]}"
+        elif [[ "${COMMAND_ARGS[0]}" == "gst-launch-1.0" ]] && [[ "$*" == *"nv"* ]]; then
+            echo -e "${YELLOW}[TIP]${NC} This looks like a GStreamer pipeline with NVIDIA elements. Consider using:"
+            echo -e "${YELLOW}[TIP]${NC} $0 run-deepstream ${COMMAND_ARGS[@]}"
         fi
+    fi
+}
+
+# Print DeepStream utilities information if no command provided
+print_deepstream_info() {
+    if [ ${#COMMAND_ARGS[@]} -eq 0 ]; then
+        echo -e "${BLUE}[INFO]${NC} Container accessed. Available DeepStream utilities:"
+        echo -e "  ${GREEN}deepstream-help${NC}     - Show DeepStream usage information"
+        echo -e "  ${GREEN}ds-check${NC}           - Check DeepStream installation and configuration"
+        echo -e "  ${GREEN}run-deepstream${NC}     - Run applications with DeepStream environment"
+        echo -e "  ${GREEN}container-info${NC}     - Show detailed container information"
+        echo -e "Run '$0 --help' for more options"
     fi
 }
 
@@ -251,6 +268,7 @@ main() {
     check_container
     suggest_wrapper
     exec_in_container
+    print_deepstream_info
     
     echo -e "${GREEN}[DONE]${NC} Command completed successfully"
     return $EXIT_SUCCESS
